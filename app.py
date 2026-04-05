@@ -142,12 +142,20 @@ def analyze(df, cur_price):
                 resistances.append({'Date': y_date, 'Price': y_high, 'Type': '前一交易日高點(量增黑K)'})
 
     if 'Net_Buy' in df.columns:
-        std = df['Net_Buy'].std()
+        # 【核心修改】：只取出最近 60 筆資料來計算法人大買/大賣
+        chip_recent_df = df.tail(60)
+        
+        std = chip_recent_df['Net_Buy'].std()
         if std > 0:
-            big_b = df[(df['Net_Buy'] > 1.0 * std) & (df['Close'] > df['Open'])]
-            for _, r in big_b.iterrows(): supports.append({'Date': str(r['Date']), 'Price': r['Low'], 'Type': '法人大買紅K底部'})
-            big_s = df[(df['Net_Buy'] < -1.0 * std) & (df['Close'] < df['Open'])]
-            for _, r in big_s.iterrows(): resistances.append({'Date': str(r['Date']), 'Price': r['High'], 'Type': '法人大賣黑K頂部'})
+            # 支撐：近 60 天內法人大買且收紅K
+            big_b = chip_recent_df[(chip_recent_df['Net_Buy'] > 1.0 * std) & (chip_recent_df['Close'] > chip_recent_df['Open'])]
+            for _, r in big_b.iterrows(): 
+                supports.append({'Date': str(r['Date']), 'Price': r['Low'], 'Type': '法人大買紅K底部'})
+            
+            # 壓力：近 60 天內法人大賣且收黑K
+            big_s = chip_recent_df[(chip_recent_df['Net_Buy'] < -1.0 * std) & (chip_recent_df['Close'] < chip_recent_df['Open'])]
+            for _, r in big_s.iterrows(): 
+                resistances.append({'Date': str(r['Date']), 'Price': r['High'], 'Type': '法人大賣黑K頂部'})
 
     recent_df = df.tail(20) 
     for _, r in recent_df.iterrows():
