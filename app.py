@@ -192,17 +192,14 @@ def analyze(df, cur_price):
     return final_r, final_s
 
 # ==========================================
-# Streamlit UI 區 (手機優先 - 無側邊欄版)
+# Streamlit UI 區 (縮小字體防止換行版)
 # ==========================================
 
 def main():
-    # 設定頁面，不再需要側邊欄
-    st.set_page_config(page_title="台股分析", layout="wide", initial_sidebar_state="collapsed")
+    # 1. 頂部大標題縮小：使用 <h3> 等級或直接用 HTML
+    st.markdown("<h3 style='margin-bottom: 0px;'>📈 台股支撐壓力分析</h3>", unsafe_allow_html=True)
     
-    # 直接在主畫面上方顯示標題與輸入區
-    st.title("📈 台股支撐壓力分析")
-    
-    # 建立輸入區
+    # 建立輸入區 (維持原邏輯)
     fav_list = {
         "自定義輸入": "", 
         "2301 光寶科": "2301", "2313 華通": "2313", "2317 鴻海": "2317", 
@@ -215,30 +212,37 @@ def main():
     col1, col2 = st.columns([3, 1])
     with col1:
         selected_label = st.selectbox("選擇標的", list(fav_list.keys()), label_visibility="collapsed")
-        if selected_label == "自定義輸入":
-            stock_id = st.text_input("輸入 4 位代碼", value="")
-        else:
-            stock_id = fav_list[selected_label]
+        stock_id = st.text_input("輸入 4 位代碼", value="") if selected_label == "自定義輸入" else fav_list[selected_label]
     
     with col2:
-        # 固定回測天數為 380
-        lookback = 380
         btn = st.button("執行分析", use_container_width=True)
 
     if btn or (selected_label != "自定義輸入" and stock_id != ""):
         try:
             with st.spinner('計算中...'):
-                df = get_full_data(stock_id, days=lookback)
-                if df.empty: return st.error("查無資料，請檢查代碼是否正確")
+                df = get_full_data(stock_id, days=380)
+                if df.empty: return st.error("查無資料")
                 
                 cur = float(df['Close'].iloc[-1])
                 last_date = str(df['Date'].iloc[-1])
                 r, s = analyze(df, cur)
 
-                # 置頂資訊：日期與價格
-                st.caption(f"📅 數據日期：{last_date} ( 回測380天，已計算至 MA240 年線 )")
-                st.markdown(f"## **{stock_id}** ｜ 收盤：**{cur:.2f}** 元")
+                # --- 關鍵修正：縮小資訊列字體並強制不換行 ---
+                st.caption(f"📅 數據日期：{last_date}")
+                
+                # 使用 HTML <span> 標籤精準控制大小 (設定為 1.2rem 約等於 H3-H4 之間)
+                # white-space: nowrap 確保絕對不會變成兩行
+                st.markdown(
+                    f"""
+                    <div style="white-space: nowrap; font-size: 1.2rem; font-weight: bold; margin-top: -10px;">
+                        {stock_id} ｜ 收盤：<span style="color: #ff4b4b;">{cur:.1f}</span> 元
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
                 st.divider()
+
+                # --- 後續顯示壓力與支撐邏輯維持不變 ---
 
                 # --- 壓力區 (綠色) ---
                 st.success("🟢 【上漲壓力區】")
@@ -247,7 +251,7 @@ def main():
                 else:
                     for i, (_, row) in enumerate(r.iterrows()):
                         pct_text = f":red[(+{row['Pct']}%)]"
-                        header_text = f"P{i+1}： {row['Price']:.2f} 元 ➜ {pct_text} | {row['Type']}"
+                        header_text = f"P{i+1}： {row['Price']:.1f} 元 ➜ {pct_text} | {row['Type']}"
                         with st.expander(header_text):
                             st.markdown(f"**發生日期：** `{row['Date']}`")
 
@@ -260,7 +264,7 @@ def main():
                 else:
                     for i, (_, row) in enumerate(s.iterrows()):
                         pct_text = f":green[({row['Pct']}%)]"
-                        header_text = f"S{i+1}： {row['Price']:.2f} 元 ➜ {pct_text} | {row['Type']}"
+                        header_text = f"S{i+1}： {row['Price']:.1f} 元 ➜ {pct_text} | {row['Type']}"
                         with st.expander(header_text):
                             st.markdown(f"**發生日期：** `{row['Date']}`")
 
