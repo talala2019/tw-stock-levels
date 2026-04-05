@@ -4,3 +4,5 @@ pandas
 numpy
 scipy
 FinMind
+tqdm
+requests
