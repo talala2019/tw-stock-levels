@@ -268,12 +268,12 @@ def main():
                 st.markdown(
                     f"""
                     <div style="display: flex; align-items: center; background-color: #f8f9fa; padding: 10px; border-radius: 8px; margin-bottom: 0px;">
-                        <div style="width: 25px; height: 80px; display: flex; flex-direction: column; align-items: center; margin-right: 15px;">
+                        <div style="width: 25px; height: 95px; display: flex; flex-direction: column; align-items: center; margin-right: 15px;">
                             <div style="width: 2px; height: {up_shadow_p}%; background-color: #333;"></div>
                             <div style="width: 12px; height: {max(body_p, 5)}%; background-color: {k_color}; border-radius: 1px;"></div>
                             <div style="width: 2px; height: {low_shadow_p}%; background-color: #333;"></div>
                         </div>
-                        <div style="flex-grow: 1; line-height: 1.5;">
+                        <div style="flex-grow: 1; line-height: 1.4;">
                             <div style="font-size: 0.95rem; color: #444;">
                                 <span style="color: {k_color}; font-weight:bold;">{ "紅K" if cur_close >= y_open else "黑K" }</span> 
                                 開: {y_open:.1f}  高: {y_high:.1f} / 低: {y_low:.1f}
@@ -282,7 +282,10 @@ def main():
                                 漲跌 3天: <span style="color:{get_clr(pct_3d)};">{pct_3d:+.1f}%</span> | 10天: <span style="color:{get_clr(pct_10d)};">{pct_10d:+.1f}%</span> | 60天: <span style="color:{get_clr(pct_60d)};">{pct_60d:+.1f}%</span>
                             </div>
                             <div style="font-size: 0.82rem; color: #444; border-top: 1px dashed #ddd; margin-top: 2px;">
-                                60日 高: {high_60:.1f} / 低: {low_60:.1f} ｜ 乖離Ma20: <span style="color:{get_clr(bias_20)}; font-weight:bold;">{bias_20:+.1f}%</span> ｜ 乖離Ma240: <span style="color:{get_clr(bias_240)};">{bias_240:+.1f}%</span>
+                                60日 高: {high_60:.1f} / 低: {low_60:.1f}
+                            </div>
+                            <div style="font-size: 0.82rem; color: #444;">
+                                乖離Ma20: <span style="color:{get_clr(bias_20)}; font-weight:bold;">{bias_20:+.1f}%</span> ｜ 乖離Ma240: <span style="color:{get_clr(bias_240)};">{bias_240:+.1f}%</span>
                             </div>
                             <div style="font-size: 0.82rem; color: #666; border-top: 1px solid #eee; margin-top: 2px; padding-top: 2px;">
                                 月線斜率: <span style="color: {slope_clr}; font-weight:bold;">{ma20_slope_pct:+.2f}%</span> ｜ 量比: <span style="color: {vol_clr}; font-weight:bold;">{vol_ratio:.2f}x</span> ｜ 周轉率: <span style="{turnover_style}">{turnover_rate:.1f}%</span>
