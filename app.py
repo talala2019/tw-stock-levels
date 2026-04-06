@@ -5,12 +5,11 @@ import numpy as np
 from scipy.signal import argrelextrema
 from FinMind.data import DataLoader
 from datetime import datetime, timedelta
-import re
 import warnings
 
 warnings.filterwarnings('ignore')
 
-# [NEW] 輔助函式：判斷顏色與正負號 (台股習慣：漲紅跌綠)
+# 輔助函式：判斷顏色與正負號
 def get_clr(val):
     return "#ff4b4b" if val > 0 else ("#00ad00" if val < 0 else "#333")
 
@@ -18,36 +17,61 @@ def get_sign(val):
     return "+" if val > 0 else ""
 
 # ==========================================
-# 核心邏輯區：保留原始邏輯內容
+# 核心邏輯區
 # ==========================================
 
-def filter_smart_levels(df_levels, is_support=True):
+def filter_smart_levels(df_levels, cur_price, is_support=True, dynamic_threshold=0.015):
     if df_levels.empty: return df_levels
     
-    # 【關鍵修正 1】：距離絕對優先 (Distance 升序排第一)
+    df_levels = df_levels[abs(df_levels['Pct']) <= 20.0]
     df_levels = df_levels.sort_values(['Distance', 'Date'], ascending=[True, False])
     
-    selected = []
+    clusters = []
     for _, row in df_levels.iterrows():
-        # 過濾掉距離超過 20% 的位置
-        if abs(row['Pct']) > 20.0:
-            continue
-            
-        is_duplicate = False
-        for s in selected:
-            # 保持 0.8% 的濾波門檻，避免重複
-            if abs(row['Price'] - s['Price']) / s['Price'] < 0.008:
-                is_duplicate = True
+        price, typ, date = row['Price'], row['Type'], row['Date']
+        
+        merged = False
+        for cluster in clusters:
+            if abs(price - cluster['mean_price']) / cluster['mean_price'] <= dynamic_threshold:
+                cluster['prices'].append(price)
+                cluster['types'].append(typ)
+                cluster['dates'].append(date)
+                cluster['mean_price'] = sum(cluster['prices']) / len(cluster['prices'])
+                merged = True
                 break
-        
-        if not is_duplicate:
-            selected.append(row)
-        
-        if len(selected) >= 5: break
+                
+        if not merged:
+            clusters.append({
+                'prices': [price], 'mean_price': price, 'types': [typ], 'dates': [date]
+            })
             
+    selected = []
+    for c in clusters:
+        mean_p = c['mean_price']
+        if is_support:
+            dist = cur_price - mean_p
+            pct = ((mean_p - cur_price) / cur_price) * 100
+        else:
+            dist = mean_p - cur_price
+            pct = ((mean_p - cur_price) / cur_price) * 100
+            
+        unique_types = list(dict.fromkeys(c['types'])) # 保持順序去重
+                
+        selected.append({
+            'Price': round(mean_p, 2),
+            'Pct': round(pct, 1),
+            'Distance': dist,
+            'Date': max(c['dates']),
+            'Signal_Count': len(c['prices']),
+            'Types_Merged': "、".join(unique_types)
+        })
+        
     res_df = pd.DataFrame(selected)
-    return res_df.sort_values('Price', ascending=not is_support)
+    if res_df.empty: return res_df
     
+    res_df = res_df.sort_values('Distance', ascending=True).head(5)
+    return res_df.sort_values('Price', ascending=not is_support)
+
 @st.cache_data(ttl=3600)
 def get_full_data(stock_id, days=380): 
     end_date = datetime.now()
@@ -55,22 +79,15 @@ def get_full_data(stock_id, days=380):
     start_str = start_date.strftime('%Y-%m-%d')
 
     df = pd.DataFrame()
-    found_ticker = f"{stock_id}.TW"
-    
-    try:
-        df = yf.download(found_ticker, start=start_str, progress=False)
-        if df.empty or len(df) < 5:
-            found_ticker = f"{stock_id}.TWO"
-            df = yf.download(found_ticker, start=start_str, progress=False)
-    except Exception:
-        found_ticker = f"{stock_id}.TWO"
-        df = yf.download(found_ticker, start=start_str, progress=False)
+    for ext in [".TW", ".TWO"]:
+        try:
+            df = yf.download(f"{stock_id}{ext}", start=start_str, progress=False)
+            if not df.empty and len(df) >= 5: break
+        except: pass
 
     if df.empty: return pd.DataFrame()
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    
+    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
     df.reset_index(inplace=True)
     df['Date'] = pd.to_datetime(df['Date']).dt.date
     
@@ -79,92 +96,115 @@ def get_full_data(stock_id, days=380):
         df_inst = dl.taiwan_stock_institutional_investors(stock_id=stock_id, start_date=start_str)
         if not df_inst.empty:
             df_inst['Date'] = pd.to_datetime(df_inst['date']).dt.date
-            if 'buy_sell' not in df_inst.columns:
-                df_inst['buy_sell'] = df_inst['buy'] - df_inst['sell']
+            if 'buy_sell' not in df_inst.columns: df_inst['buy_sell'] = df_inst['buy'] - df_inst['sell']
             inst_sum = (df_inst.groupby('Date')['buy_sell'].sum() / 1000).reset_index()
             inst_sum.rename(columns={'buy_sell': 'Net_Buy'}, inplace=True)
             df = pd.merge(df, inst_sum, on='Date', how='left').fillna(0)
-        else: 
-            df['Net_Buy'] = 0
-    except: 
-        df['Net_Buy'] = 0
+        else: df['Net_Buy'] = 0
+    except: df['Net_Buy'] = 0
     
     return df
 
 def analyze(df, cur_price):
     supports, resistances = [], []
     latest_date = str(df['Date'].iloc[-1])
+    current_idx = len(df) - 1
     
-    ma_list = ['MA5', 'MA10', 'MA20', 'MA60', 'MA120', 'MA240']
-    for ma in ma_list:
-        days = int(ma.replace('MA', ''))
-        df[ma] = df['Close'].rolling(days).mean()
-        val = round(df[ma].iloc[-1], 2)
+    # 1. 均線系統
+    for ma in [5, 10, 20, 60, 120, 240]:
+        df[f'MA{ma}'] = df['Close'].rolling(ma).mean()
+        val = round(df[f'MA{ma}'].iloc[-1], 2)
         if not np.isnan(val):
-            if val < cur_price:
-                supports.append({'Date': latest_date, 'Price': val, 'Type': f'{ma}位置'})
-            else:
-                resistances.append({'Date': latest_date, 'Price': val, 'Type': f'{ma}位置'})
+            target_list = supports if val < cur_price else resistances
+            target_list.append({'Date': latest_date, 'Price': val, 'Type': f'MA{ma}位置'})
     
     df['Vol_MA20'] = df['Volume'].rolling(20).mean()
 
+    # 2. 近期 K 線型態與法人買賣超紅黑K
     if len(df) >= 2:
         yesterday = df.iloc[-2]
-        y_open, y_low, y_high, y_close, y_vol, y_vol_ma20 = yesterday['Open'], yesterday['Low'], yesterday['High'], yesterday['Close'], yesterday['Volume'], yesterday['Vol_MA20']
-        y_date = str(yesterday['Date'])
-
-        if y_vol > y_vol_ma20:
-            if (y_low < cur_price) and (y_close > y_open): 
-                supports.append({'Date': y_date, 'Price': y_low, 'Type': '前一交易日低點(量增紅K)'})
-            if (y_high > cur_price) and (y_close < y_open): 
-                resistances.append({'Date': y_date, 'Price': y_high, 'Type': '前一交易日高點(量增黑K)'})
+        if yesterday['Volume'] > yesterday['Vol_MA20']:
+            if (yesterday['Low'] < cur_price) and (yesterday['Close'] > yesterday['Open']): 
+                supports.append({'Date': str(yesterday['Date']), 'Price': yesterday['Low'], 'Type': '前日量增紅K低點'})
+            if (yesterday['High'] > cur_price) and (yesterday['Close'] < yesterday['Open']): 
+                resistances.append({'Date': str(yesterday['Date']), 'Price': yesterday['High'], 'Type': '前日量增黑K高點'})
 
     if 'Net_Buy' in df.columns:
         chip_recent_df = df.tail(60)
         std = chip_recent_df['Net_Buy'].std()
         if std > 0:
-            big_b = chip_recent_df[(chip_recent_df['Net_Buy'] > 1.0 * std) & (chip_recent_df['Close'] > chip_recent_df['Open'])]
-            for _, r in big_b.iterrows(): 
+            for _, r in chip_recent_df[(chip_recent_df['Net_Buy'] > 1.0 * std) & (chip_recent_df['Close'] > chip_recent_df['Open'])].iterrows(): 
                 supports.append({'Date': str(r['Date']), 'Price': r['Low'], 'Type': '法人大買紅K底部'})
-            big_s = chip_recent_df[(chip_recent_df['Net_Buy'] < -1.0 * std) & (chip_recent_df['Close'] < chip_recent_df['Open'])]
-            for _, r in big_s.iterrows(): 
+            for _, r in chip_recent_df[(chip_recent_df['Net_Buy'] < -1.0 * std) & (chip_recent_df['Close'] < chip_recent_df['Open'])].iterrows(): 
                 resistances.append({'Date': str(r['Date']), 'Price': r['High'], 'Type': '法人大賣黑K頂部'})
 
-    recent_df = df.tail(20) 
-    for _, r in recent_df.iterrows():
-        if r['Volume'] > r['Vol_MA20'] * 1.5:
-            d_str = str(r['Date'])
-            if r['Close'] > r['Open']:
-                supports.append({'Date': d_str, 'Price': r['Low'], 'Type': '帶量紅K底部'})
-            elif r['Close'] < r['Open']:
-                resistances.append({'Date': d_str, 'Price': r['High'], 'Type': '帶量黑K頂部'})
+        # 【新增 1】：法人成本防線 (60日均建倉成本 VWAP)
+        buy_days = chip_recent_df[chip_recent_df['Net_Buy'] > 0].copy()
+        if not buy_days.empty and buy_days['Net_Buy'].sum() > 0:
+            buy_days['Typical'] = (buy_days['High'] + buy_days['Low'] + buy_days['Close']) / 3
+            inst_cost = (buy_days['Typical'] * buy_days['Net_Buy']).sum() / buy_days['Net_Buy'].sum()
+            if inst_cost > 0:
+                target_list = supports if inst_cost < cur_price else resistances
+                target_list.append({'Date': latest_date, 'Price': round(inst_cost, 2), 'Type': '60日法人成本防線'})
 
-    n = 5
-    max_idx = argrelextrema(df['High'].values, np.greater_equal, order=n)[0]
-    min_idx = argrelextrema(df['Low'].values, np.less_equal, order=n)[0]
-    for i in max_idx[-10:]: resistances.append({'Date': str(df['Date'].iloc[i]), 'Price': df['High'].iloc[i], 'Type': '波段相對高點'})
-    for i in min_idx[-10:]: supports.append({'Date': str(df['Date'].iloc[i]), 'Price': df['Low'].iloc[i], 'Type': '波段相對低點'})
+    # 【新增 2】：大量套牢區 / 大量換手區 (近 120 天前 3 大成交量)
+    top_vol_days = df.tail(120).nlargest(3, 'Volume')
+    for _, row in top_vol_days.iterrows():
+        date_str = str(row['Date'])
+        if row['Close'] > cur_price:
+            resistances.append({'Date': date_str, 'Price': row['Close'], 'Type': '大量套牢區'})
+        else:
+            supports.append({'Date': date_str, 'Price': row['Close'], 'Type': '大量換手支撐區'})
 
+    # 【新增 3 & 4】：波段支撐/壓力 & 近期點連線 (趨勢線投影)
+    # 將 order 設為 10 來抓取較明顯的波段轉折
+    n_swing = 10
+    max_idx = argrelextrema(df['High'].values, np.greater_equal, order=n_swing)[0]
+    min_idx = argrelextrema(df['Low'].values, np.less_equal, order=n_swing)[0]
+    
+    # 波段支撐/壓力
+    for i in max_idx[-3:]: 
+        resistances.append({'Date': str(df['Date'].iloc[i]), 'Price': df['High'].iloc[i], 'Type': '波段壓力'})
+    for i in min_idx[-3:]: 
+        supports.append({'Date': str(df['Date'].iloc[i]), 'Price': df['Low'].iloc[i], 'Type': '波段支撐'})
+        
+    # 近期高點連線 (下降壓力線)
+    if len(max_idx) >= 2:
+        idx1, idx2 = max_idx[-2], max_idx[-1]
+        if idx1 != idx2 and idx2 < current_idx: # 確保不是同一天且有投影空間
+            slope = (df['High'].iloc[idx2] - df['High'].iloc[idx1]) / (idx2 - idx1)
+            proj_r = df['High'].iloc[idx2] + slope * (current_idx - idx2)
+            if proj_r > cur_price:
+                resistances.append({'Date': latest_date, 'Price': round(proj_r, 2), 'Type': '近期高點連線'})
+
+    # 近期低點連線 (上升支撐線)
+    if len(min_idx) >= 2:
+        idx1, idx2 = min_idx[-2], min_idx[-1]
+        if idx1 != idx2 and idx2 < current_idx:
+            slope = (df['Low'].iloc[idx2] - df['Low'].iloc[idx1]) / (idx2 - idx1)
+            proj_s = df['Low'].iloc[idx2] + slope * (current_idx - idx2)
+            if proj_s > 0 and proj_s < cur_price:
+                supports.append({'Date': latest_date, 'Price': round(proj_s, 2), 'Type': '近期低點連線'})
+
+    # 整數關卡
     step = 10 if cur_price < 100 else (50 if cur_price < 500 else 100)
-    lower_round = (cur_price // step) * step
-    upper_round = lower_round + step
+    lower_round, upper_round = (cur_price // step) * step, (cur_price // step) * step + step
     supports.append({'Date': latest_date, 'Price': float(lower_round), 'Type': '整數心理關卡'})
     resistances.append({'Date': latest_date, 'Price': float(upper_round), 'Type': '整數心理關卡'})
 
-    df_s = pd.DataFrame(supports).drop_duplicates()
+    # 執行清洗與動態分群
+    df_s = pd.DataFrame(supports).drop_duplicates(subset=['Price', 'Type'])
     if not df_s.empty:
         df_s = df_s[df_s['Price'] < cur_price].copy()
-        df_s['Distance'] = cur_price - df_s['Price']
-        df_s['Pct'] = ((df_s['Price'] - cur_price) / cur_price * 100).round(1)
+        df_s['Distance'], df_s['Pct'] = cur_price - df_s['Price'], ((df_s['Price'] - cur_price) / cur_price * 100).round(1)
     
-    df_r = pd.DataFrame(resistances).drop_duplicates()
+    df_r = pd.DataFrame(resistances).drop_duplicates(subset=['Price', 'Type'])
     if not df_r.empty:
         df_r = df_r[df_r['Price'] > cur_price].copy()
-        df_r['Distance'] = df_r['Price'] - cur_price
-        df_r['Pct'] = ((df_r['Price'] - cur_price) / cur_price * 100).round(1)
+        df_r['Distance'], df_r['Pct'] = df_r['Price'] - cur_price, ((df_r['Price'] - cur_price) / cur_price * 100).round(1)
 
-    final_r = filter_smart_levels(df_r, is_support=False)
-    final_s = filter_smart_levels(df_s, is_support=True)
+    final_r = filter_smart_levels(df_r, cur_price, is_support=False)
+    final_s = filter_smart_levels(df_s, cur_price, is_support=True)
 
     return final_r, final_s
 
@@ -175,7 +215,6 @@ def analyze(df, cur_price):
 def main():
     st.markdown("<h3 style='margin-bottom: 0px;'>📈 台股支撐壓力分析</h3>", unsafe_allow_html=True)
     
-    # 建立輸入區
     fav_list = {
         "自定義輸入": "", "2301 光寶科": "2301", "2308 台達電": "2308", "2313 華通": "2313",
         "2317 鴻海": "2317", "2330 台積電": "2330", "2337 旺宏": "2337", "2449 京元電": "2449", 
@@ -200,11 +239,9 @@ def main():
                 df = get_full_data(stock_id, days=380)
                 if df.empty: return st.error("查無資料")
                 
-                # --- [周轉率抓取邏輯] ---
-                import yfinance as yf
+                # --- 周轉率抓取邏輯 ---
                 ticker = yf.Ticker(f"{stock_id}.TW")
-                info = ticker.info
-                shares = info.get('sharesOutstanding') or info.get('floatShares') or 0
+                shares = ticker.info.get('sharesOutstanding') or ticker.info.get('floatShares') or 0
                 if shares == 0:
                     try:
                         shares_series = ticker.get_shares_full(start="2025-01-01")
@@ -214,35 +251,32 @@ def main():
                 cur_vol_shares = df['Volume'].iloc[-1]
                 turnover_rate = (cur_vol_shares / shares * 100) if shares > 0 else 0
                 
-                # --- [數據計算區] ---
+                # --- 數據計算區 ---
                 cur_close = float(df['Close'].iloc[-1])
                 prev_close = float(df['Close'].iloc[-2])
                 y_open, y_high, y_low = df['Open'].iloc[-1], df['High'].iloc[-1], df['Low'].iloc[-1]
                 
+                # 【關鍵修正】：先執行分析，讓 df 產生 MA20, MA240, Vol_MA20 等欄位
+                r, s = analyze(df, cur_close) 
+
+                # 現在這些欄位已經存在了，可以安全計算
                 pct_3d = ((cur_close - df['Close'].iloc[-4]) / df['Close'].iloc[-4] * 100) if len(df)>=4 else 0
                 pct_10d = ((cur_close - df['Close'].iloc[-11]) / df['Close'].iloc[-11] * 100) if len(df)>=11 else 0
                 pct_60d = ((cur_close - df['Close'].iloc[-61]) / df['Close'].iloc[-61] * 100) if len(df)>=61 else 0
                 
                 high_60, low_60 = df.tail(60)['High'].max(), df.tail(60)['Low'].min()
                 
-                # 均線與乖離計算
-                df['MA20'] = df['Close'].rolling(20).mean()
-                df['MA240'] = df['Close'].rolling(240).mean()
-                bias_20 = ((cur_close - df['MA20'].iloc[-1]) / df['MA20'].iloc[-1] * 100) if not pd.isna(df['MA20'].iloc[-1]) else 0
-                bias_240 = ((cur_close - df['MA240'].iloc[-1]) / df['MA240'].iloc[-1] * 100) if not pd.isna(df['MA240'].iloc[-1]) else 0
+                # 安全讀取 MA 數據（確保 analyze 已運行）
+                bias_20 = ((cur_close - df['MA20'].iloc[-1]) / df['MA20'].iloc[-1] * 100) if 'MA20' in df.columns else 0
+                bias_240 = ((cur_close - df['MA240'].iloc[-1]) / df['MA240'].iloc[-1] * 100) if 'MA240' in df.columns else 0
                 
-                # 月線斜率與量比
-                df['Vol_MA20'] = df['Volume'].rolling(20).mean()
                 ma20_slope_pct = ((df['MA20'].iloc[-1] - df['MA20'].iloc[-2]) / df['MA20'].iloc[-2] * 100) if len(df)>20 else 0
-                vol_ratio = (df['Volume'].iloc[-1] / df['Vol_MA20'].iloc[-1]) if df['Vol_MA20'].iloc[-1] > 0 else 0
-                
-                r, s = analyze(df, cur_close)
+                vol_ratio = (df['Volume'].iloc[-1] / df['Vol_MA20'].iloc[-1]) if 'Vol_MA20' in df.columns and df['Vol_MA20'].iloc[-1] > 0 else 0
 
-                # --- [UI 顯示區] ---
+                # --- UI 顯示區 ---
                 st.caption(f"📅 數據日期：{df['Date'].iloc[-1]}")
                 
-                diff = cur_close - prev_close
-                pct = (diff / prev_close) * 100
+                diff, pct = cur_close - prev_close, ((cur_close - prev_close) / prev_close) * 100
                 st.markdown(
                     f"""
                     <div style="font-size: 1.1rem; font-weight: bold; margin-top: -10px; margin-bottom: 5px;">
@@ -254,15 +288,12 @@ def main():
                     """, unsafe_allow_html=True
                 )
                 
-                total_range = y_high - y_low if y_high != y_low else 1
+                total_range = max(y_high - y_low, 1)
                 body_top, body_bottom = max(y_open, cur_close), min(y_open, cur_close)
-                up_shadow_p = ((y_high - body_top) / total_range) * 100
-                body_p = ((body_top - body_bottom) / total_range) * 100
-                low_shadow_p = ((body_bottom - y_low) / total_range) * 100
+                up_shadow_p, body_p, low_shadow_p = ((y_high - body_top) / total_range) * 100, ((body_top - body_bottom) / total_range) * 100, ((body_bottom - y_low) / total_range) * 100
                 
                 k_color = "#ff4b4b" if cur_close >= y_open else "#00ad00"
-                slope_clr = "#ff4b4b" if ma20_slope_pct > 0 else "#00ad00"
-                vol_clr = "#1f77b4" if vol_ratio > 1.2 else ("#999" if vol_ratio < 0.8 else "#666")
+                slope_clr, vol_clr = "#ff4b4b" if ma20_slope_pct > 0 else "#00ad00", "#1f77b4" if vol_ratio > 1.2 else ("#999" if vol_ratio < 0.8 else "#666")
                 turnover_style = "color:#ff4b4b; font-weight:bold;" if turnover_rate > 5 else "color:#666;"
 
                 st.markdown(
@@ -300,14 +331,14 @@ def main():
                 st.success("🟢 【上漲壓力區】")
                 if not r.empty:
                     for i, (_, row) in enumerate(r.iterrows()):
-                        header = f"P{i+1}： {row['Price']:.1f} 元 ➜ :red[(+{row['Pct']}%)] | {row['Type']}"
-                        with st.expander(header): st.markdown(f"**日期：** `{row['Date']}`")
+                        with st.expander(f"P{i+1}： {row['Price']:.1f} 元 ➜ :red[(+{row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
+                            st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**最新觸發日期：** `{row['Date']}`")
                 
                 st.error("🔴 【下跌支撐區】")
                 if not s.empty:
                     for i, (_, row) in enumerate(s.iterrows()):
-                        header = f"S{i+1}： {row['Price']:.1f} 元 ➜ :green[({row['Pct']}%)] | {row['Type']}"
-                        with st.expander(header): st.markdown(f"**日期：** `{row['Date']}`")
+                        with st.expander(f"S{i+1}： {row['Price']:.1f} 元 ➜ :green[({row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
+                            st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**最新觸發日期：** `{row['Date']}`")
 
         except Exception as e:
             st.error(f"分析錯誤: {e}")
