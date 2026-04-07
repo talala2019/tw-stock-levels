@@ -29,7 +29,6 @@ def filter_smart_levels(df_levels, cur_price, is_support=True, dynamic_threshold
     clusters = []
     for _, row in df_levels.iterrows():
         price, typ, date = row['Price'], row['Type'], row['Date']
-        
         merged = False
         for cluster in clusters:
             if abs(price - cluster['mean_price']) / cluster['mean_price'] <= dynamic_threshold:
@@ -39,29 +38,27 @@ def filter_smart_levels(df_levels, cur_price, is_support=True, dynamic_threshold
                 cluster['mean_price'] = sum(cluster['prices']) / len(cluster['prices'])
                 merged = True
                 break
-                
         if not merged:
-            clusters.append({
-                'prices': [price], 'mean_price': price, 'types': [typ], 'dates': [date]
-            })
+            clusters.append({'prices': [price], 'mean_price': price, 'types': [typ], 'dates': [date]})
             
     selected = []
     for c in clusters:
         mean_p = c['mean_price']
-        if is_support:
-            dist = cur_price - mean_p
-            pct = ((mean_p - cur_price) / cur_price) * 100
-        else:
-            dist = mean_p - cur_price
-            pct = ((mean_p - cur_price) / cur_price) * 100
-            
-        unique_types = list(dict.fromkeys(c['types'])) # 保持順序去重
+        dist = abs(cur_price - mean_p)
+        pct = ((mean_p - cur_price) / cur_price) * 100
+        
+        # --- 核心修改：日期去重、轉物件、降序排序 ---
+        date_objs = pd.to_datetime(list(set(c['dates'])))
+        sorted_dates = sorted(date_objs, reverse=True) 
+        unique_dates_str = [d.strftime('%Y-%m-%d') for d in sorted_dates]
+        
+        unique_types = list(dict.fromkeys(c['types']))
                 
         selected.append({
             'Price': round(mean_p, 2),
             'Pct': round(pct, 1),
             'Distance': dist,
-            'Date': max(c['dates']),
+            'All_Dates': " | ".join(unique_dates_str), # 這是給 UI 用的新欄位
             'Signal_Count': len(c['prices']),
             'Types_Merged': "、".join(unique_types)
         })
@@ -221,8 +218,8 @@ def main():
         "2451 創見": "2451", "2454 聯發科": "2454", "2455 全新": "2455", "3017 奇鋐": "3017", 
         "3037 欣興": "3037", "3081 聯亞": "3081", "3105 穩懋": "3105", "3163 波若威": "3163", 
         "3231 緯創": "3231", "3260 威剛": "3260", "3293 鈊象": "3293", "3324 雙鴻": "3324",
-        "3363 上詮": "3363", "3450 聯鈞": "3450", "3711 日月光": "3711", "4979 華星光": "4979",
-        "5340 建榮": "5340", "5475 德宏": "5475", "6285 啟碁": "6285", "6442 光聖": "6442", 
+        "3363 上詮": "3363", "3450 聯鈞": "3450", "3711 日月光": "3711", "4722 國精化": "4722", 
+        "4979 華星光": "4979","5340 建榮": "5340", "5475 德宏": "5475", "6285 啟碁": "6285", "6442 光聖": "6442", 
         "6451 訊芯-KY": "6451", "6669 緯穎": "6669", "6770 力積電": "6770", "8021 尖點": "8021", "8271 宇瞻": "8271"
     }
     
@@ -332,13 +329,13 @@ def main():
                 if not r.empty:
                     for i, (_, row) in enumerate(r.iterrows()):
                         with st.expander(f"P{i+1}： {row['Price']:.1f} 元 ➜ :red[(+{row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
-                            st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**最新觸發日期：** `{row['Date']}`")
+                            st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**觸發歷史(新→舊)：**\n`{row['All_Dates']}`")
                 
                 st.error("🔴 【下跌支撐區】")
                 if not s.empty:
                     for i, (_, row) in enumerate(s.iterrows()):
                         with st.expander(f"S{i+1}： {row['Price']:.1f} 元 ➜ :green[({row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
-                            st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**最新觸發日期：** `{row['Date']}`")
+                            st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**觸發歷史(新→舊)：**\n`{row['All_Dates']}`")
 
         except Exception as e:
             st.error(f"分析錯誤: {e}")
