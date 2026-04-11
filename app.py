@@ -210,6 +210,19 @@ def analyze(df, cur_price):
 # ==========================================
 
 def main():
+
+    # 使用這段更精確的 CSS
+    st.markdown("""
+        <style>
+       
+        /* 3. 針對 Expander (P1, S1...)，使用負邊距讓它們貼在一起 */
+        [data-testid="stExpander"] {
+            margin-bottom: -11px !important;
+        }
+
+        </style>
+    """, unsafe_allow_html=True)
+    
     st.markdown("<h3 style='margin-bottom: 0px;'>📈 台股支撐壓力分析</h3>", unsafe_allow_html=True)
     
     fav_list = {
@@ -233,109 +246,127 @@ def main():
     if btn or (selected_label != "自定義輸入" and stock_id != ""):
         try:
             with st.spinner('計算中...'):
-                df = get_full_data(stock_id, days=380)
-                if df.empty: return st.error("查無資料")
-                
-                # --- 周轉率抓取邏輯 ---
-                ticker = yf.Ticker(f"{stock_id}.TW")
-                shares = ticker.info.get('sharesOutstanding') or ticker.info.get('floatShares') or 0
-                if shares == 0:
-                    try:
-                        shares_series = ticker.get_shares_full(start="2025-01-01")
-                        if not shares_series.empty: shares = shares_series.iloc[-1]
-                    except: shares = 0
-                
-                cur_vol_shares = df['Volume'].iloc[-1]
-                turnover_rate = (cur_vol_shares / shares * 100) if shares > 0 else 0
-                
-                # --- 數據計算區 ---
-                cur_close = float(df['Close'].iloc[-1])
-                prev_close = float(df['Close'].iloc[-2])
-                y_open, y_high, y_low = df['Open'].iloc[-1], df['High'].iloc[-1], df['Low'].iloc[-1]
-                
-                # 【關鍵修正】：先執行分析，讓 df 產生 MA20, MA240, Vol_MA20 等欄位
-                r, s = analyze(df, cur_close) 
+                df_full = get_full_data(stock_id, days=380)
+            
+            if df_full.empty: 
+                return st.error("查無資料")
 
-                # 現在這些欄位已經存在了，可以安全計算
-                pct_3d = ((cur_close - df['Close'].iloc[-4]) / df['Close'].iloc[-4] * 100) if len(df)>=4 else 0
-                pct_10d = ((cur_close - df['Close'].iloc[-11]) / df['Close'].iloc[-11] * 100) if len(df)>=11 else 0
-                pct_60d = ((cur_close - df['Close'].iloc[-61]) / df['Close'].iloc[-61] * 100) if len(df)>=61 else 0
+            # === 【新增功能】：建立兩個 Tabs ===
+            # tab_today, tab_yesterday = st.tabs(["📅 最新交易日", "⏮️ 前一交易日"])
+            
+            # === 【修改順序】：前一交易日在左，最新交易日在右 ===
+            tab_yesterday, tab_today = st.tabs(["⏮️ 前一交易日", "📅 最新交易日"])
+            
+            # 使用迴圈，把相同版面跟邏輯餵給兩個 Tabs，只差在資料集不同
+            for tab_obj, is_latest in [(tab_today, True), (tab_yesterday, False)]:
+                with tab_obj:
+                    # 核心修改：如果是前一天，就捨棄最後一筆最新資料
+                    df = df_full.copy() if is_latest else df_full.iloc[:-1].copy()
+                    
+                    if len(df) < 5:
+                        st.warning("資料筆數不足無法分析此日期")
+                        continue
                 
-                high_60, low_60 = df.tail(60)['High'].max(), df.tail(60)['Low'].min()
-                
-                # 安全讀取 MA 數據（確保 analyze 已運行）
-                bias_20 = ((cur_close - df['MA20'].iloc[-1]) / df['MA20'].iloc[-1] * 100) if 'MA20' in df.columns else 0
-                bias_240 = ((cur_close - df['MA240'].iloc[-1]) / df['MA240'].iloc[-1] * 100) if 'MA240' in df.columns else 0
-                
-                ma20_slope_pct = ((df['MA20'].iloc[-1] - df['MA20'].iloc[-2]) / df['MA20'].iloc[-2] * 100) if len(df)>20 else 0
-                vol_ratio = (df['Volume'].iloc[-1] / df['Vol_MA20'].iloc[-1]) if 'Vol_MA20' in df.columns and df['Vol_MA20'].iloc[-1] > 0 else 0
+                    # --- 周轉率抓取邏輯 (以下皆為原版未更動程式碼) ---
+                    ticker = yf.Ticker(f"{stock_id}.TW")
+                    shares = ticker.info.get('sharesOutstanding') or ticker.info.get('floatShares') or 0
+                    if shares == 0:
+                        try:
+                            shares_series = ticker.get_shares_full(start="2025-01-01")
+                            if not shares_series.empty: shares = shares_series.iloc[-1]
+                        except: shares = 0
+                    
+                    cur_vol_shares = df['Volume'].iloc[-1]
+                    turnover_rate = (cur_vol_shares / shares * 100) if shares > 0 else 0
+                    
+                    # --- 數據計算區 ---
+                    cur_close = float(df['Close'].iloc[-1])
+                    prev_close = float(df['Close'].iloc[-2])
+                    y_open, y_high, y_low = df['Open'].iloc[-1], df['High'].iloc[-1], df['Low'].iloc[-1]
+                    
+                    # 【關鍵修正】：先執行分析，讓 df 產生 MA20, MA240, Vol_MA20 等欄位
+                    r, s = analyze(df, cur_close) 
 
-                # --- UI 顯示區 ---
-                st.caption(f"📅 數據日期：{df['Date'].iloc[-1]}")
-                
-                diff, pct = cur_close - prev_close, ((cur_close - prev_close) / prev_close) * 100
-                st.markdown(
-                    f"""
-                    <div style="font-size: 1.1rem; font-weight: bold; margin-top: -10px; margin-bottom: 5px;">
-                        {stock_id} ｜ 收盤 : <span style="font-size: 1.2rem;">{cur_close:.1f}</span> 
-                        <span style="color: {get_clr(diff)}; margin-left: 8px;">
-                            {get_sign(diff)}{diff:.1f} ({get_sign(pct)}{pct:.1f}%)
-                        </span>
-                    </div>
-                    """, unsafe_allow_html=True
-                )
-                
-                total_range = max(y_high - y_low, 1)
-                body_top, body_bottom = max(y_open, cur_close), min(y_open, cur_close)
-                up_shadow_p, body_p, low_shadow_p = ((y_high - body_top) / total_range) * 100, ((body_top - body_bottom) / total_range) * 100, ((body_bottom - y_low) / total_range) * 100
-                
-                k_color = "#ff4b4b" if cur_close >= y_open else "#00ad00"
-                slope_clr, vol_clr = "#ff4b4b" if ma20_slope_pct > 0 else "#00ad00", "#1f77b4" if vol_ratio > 1.2 else ("#999" if vol_ratio < 0.8 else "#666")
-                turnover_style = "color:#ff4b4b; font-weight:bold;" if turnover_rate > 5 else "color:#666;"
+                    # 現在這些欄位已經存在了，可以安全計算
+                    pct_3d = ((cur_close - df['Close'].iloc[-4]) / df['Close'].iloc[-4] * 100) if len(df)>=4 else 0
+                    pct_10d = ((cur_close - df['Close'].iloc[-11]) / df['Close'].iloc[-11] * 100) if len(df)>=11 else 0
+                    pct_60d = ((cur_close - df['Close'].iloc[-61]) / df['Close'].iloc[-61] * 100) if len(df)>=61 else 0
+                    
+                    high_60, low_60 = df.tail(60)['High'].max(), df.tail(60)['Low'].min()
+                    
+                    # 安全讀取 MA 數據（確保 analyze 已運行）
+                    bias_20 = ((cur_close - df['MA20'].iloc[-1]) / df['MA20'].iloc[-1] * 100) if 'MA20' in df.columns else 0
+                    bias_240 = ((cur_close - df['MA240'].iloc[-1]) / df['MA240'].iloc[-1] * 100) if 'MA240' in df.columns else 0
+                    
+                    ma20_slope_pct = ((df['MA20'].iloc[-1] - df['MA20'].iloc[-2]) / df['MA20'].iloc[-2] * 100) if len(df)>20 else 0
+                    vol_ratio = (df['Volume'].iloc[-1] / df['Vol_MA20'].iloc[-1]) if 'Vol_MA20' in df.columns and df['Vol_MA20'].iloc[-1] > 0 else 0
 
-                st.markdown(
-                    f"""
-                    <div style="display: flex; align-items: center; background-color: #f8f9fa; padding: 10px; border-radius: 8px; margin-bottom: 0px;">
-                        <div style="width: 25px; height: 95px; display: flex; flex-direction: column; align-items: center; margin-right: 15px;">
-                            <div style="width: 2px; height: {up_shadow_p}%; background-color: #333;"></div>
-                            <div style="width: 12px; height: {max(body_p, 5)}%; background-color: {k_color}; border-radius: 1px;"></div>
-                            <div style="width: 2px; height: {low_shadow_p}%; background-color: #333;"></div>
+                    # --- UI 顯示區 ---
+                    st.caption(f"📅 數據日期：{df['Date'].iloc[-1]}")
+                    
+                    diff, pct = cur_close - prev_close, ((cur_close - prev_close) / prev_close) * 100
+                    st.markdown(
+                        f"""
+                        <div style="font-size: 1.1rem; font-weight: bold; margin-top: -10px; margin-bottom: 5px;">
+                            {stock_id} ｜ 收盤 : <span style="font-size: 1.2rem;">{cur_close:.1f}</span> 
+                            <span style="color: {get_clr(diff)}; margin-left: 8px;">
+                                {get_sign(diff)}{diff:.1f} ({get_sign(pct)}{pct:.1f}%)
+                            </span>
                         </div>
-                        <div style="flex-grow: 1; line-height: 1.4;">
-                            <div style="font-size: 0.95rem; color: #444;">
-                                <span style="color: {k_color}; font-weight:bold;">{ "紅K" if cur_close >= y_open else "黑K" }</span> 
-                                開: {y_open:.1f}  高: {y_high:.1f} / 低: {y_low:.1f}
+                        """, unsafe_allow_html=True
+                    )
+                    
+                    total_range = max(y_high - y_low, 1)
+                    body_top, body_bottom = max(y_open, cur_close), min(y_open, cur_close)
+                    up_shadow_p, body_p, low_shadow_p = ((y_high - body_top) / total_range) * 100, ((body_top - body_bottom) / total_range) * 100, ((body_bottom - y_low) / total_range) * 100
+                    
+                    k_color = "#ff4b4b" if cur_close >= y_open else "#00ad00"
+                    slope_clr, vol_clr = "#ff4b4b" if ma20_slope_pct > 0 else "#00ad00", "#1f77b4" if vol_ratio > 1.2 else ("#999" if vol_ratio < 0.8 else "#666")
+                    turnover_style = "color:#ff4b4b; font-weight:bold;" if turnover_rate > 5 else "color:#666;"
+
+                    st.markdown(
+                        f"""
+                        <div style="display: flex; align-items: center; background-color: #f8f9fa; padding: 10px; border-radius: 8px; margin-bottom: 0px;">
+                            <div style="width: 25px; height: 95px; display: flex; flex-direction: column; align-items: center; margin-right: 15px;">
+                                <div style="width: 2px; height: {up_shadow_p}%; background-color: #333;"></div>
+                                <div style="width: 12px; height: {max(body_p, 5)}%; background-color: {k_color}; border-radius: 1px;"></div>
+                                <div style="width: 2px; height: {low_shadow_p}%; background-color: #333;"></div>
                             </div>
-                            <div style="font-size: 0.82rem; color: #666;">
-                                漲跌 3天: <span style="color:{get_clr(pct_3d)};">{pct_3d:+.1f}%</span> | 10天: <span style="color:{get_clr(pct_10d)};">{pct_10d:+.1f}%</span> | 60天: <span style="color:{get_clr(pct_60d)};">{pct_60d:+.1f}%</span>
-                            </div>
-                            <div style="font-size: 0.82rem; color: #444; border-top: 1px dashed #ddd; margin-top: 2px;">
-                                60日 高: {high_60:.1f} / 低: {low_60:.1f}
-                            </div>
-                            <div style="font-size: 0.82rem; color: #444;">
-                                乖離Ma20: <span style="color:{get_clr(bias_20)}; font-weight:bold;">{bias_20:+.1f}%</span> ｜ 乖離Ma240: <span style="color:{get_clr(bias_240)};">{bias_240:+.1f}%</span>
-                            </div>
-                            <div style="font-size: 0.82rem; color: #666; border-top: 1px solid #eee; margin-top: 2px; padding-top: 2px;">
-                                月線斜率: <span style="color: {slope_clr}; font-weight:bold;">{ma20_slope_pct:+.2f}%</span> ｜ 量比: <span style="color: {vol_clr}; font-weight:bold;">{vol_ratio:.2f}x</span> ｜ 周轉率: <span style="{turnover_style}">{turnover_rate:.1f}%</span>
+                            <div style="flex-grow: 1; line-height: 1.4;">
+                                <div style="font-size: 0.95rem; color: #444;">
+                                    <span style="color: {k_color}; font-weight:bold;">{ "紅K" if cur_close >= y_open else "黑K" }</span> 
+                                    開: {y_open:.1f}  高: {y_high:.1f} / 低: {y_low:.1f}
+                                </div>
+                                <div style="font-size: 0.82rem; color: #666;">
+                                    漲跌 3天: <span style="color:{get_clr(pct_3d)};">{pct_3d:+.1f}%</span> | 10天: <span style="color:{get_clr(pct_10d)};">{pct_10d:+.1f}%</span> | 60天: <span style="color:{get_clr(pct_60d)};">{pct_60d:+.1f}%</span>
+                                </div>
+                                <div style="font-size: 0.82rem; color: #444; border-top: 1px dashed #ddd; margin-top: 2px;">
+                                    60日 高: {high_60:.1f} / 低: {low_60:.1f}
+                                </div>
+                                <div style="font-size: 0.82rem; color: #444;">
+                                    乖離Ma20: <span style="color:{get_clr(bias_20)}; font-weight:bold;">{bias_20:+.1f}%</span> ｜ 乖離Ma240: <span style="color:{get_clr(bias_240)};">{bias_240:+.1f}%</span>
+                                </div>
+                                <div style="font-size: 0.82rem; color: #666; border-top: 1px solid #eee; margin-top: 2px; padding-top: 2px;">
+                                    月線斜率: <span style="color: {slope_clr}; font-weight:bold;">{ma20_slope_pct:+.2f}%</span> ｜ 量比: <span style="color: {vol_clr}; font-weight:bold;">{vol_ratio:.2f}x</span> ｜ 周轉率: <span style="{turnover_style}">{turnover_rate:.1f}%</span>
+                                </div>
                             </div>
                         </div>
-                    </div>
-                    """, unsafe_allow_html=True
-                )
+                        """, unsafe_allow_html=True
+                    )
 
-                st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
-                
-                st.success("🟢 【上漲壓力區】")
-                if not r.empty:
-                    for i, (_, row) in enumerate(r.iterrows()):
-                        with st.expander(f"P{i+1}： {row['Price']:.1f} 元 ➜ :red[(+{row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
-                            st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**觸發歷史(新→舊)：**\n`{row['All_Dates']}`")
-                
-                st.error("🔴 【下跌支撐區】")
-                if not s.empty:
-                    for i, (_, row) in enumerate(s.iterrows()):
-                        with st.expander(f"S{i+1}： {row['Price']:.1f} 元 ➜ :green[({row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
-                            st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**觸發歷史(新→舊)：**\n`{row['All_Dates']}`")
+                    st.markdown("<div style='margin-bottom: 5px;'></div>", unsafe_allow_html=True)
+                    
+                    st.success("🟢 【上漲壓力區】")
+                    if not r.empty:
+                        for i, (_, row) in enumerate(r.iterrows()):
+                            with st.expander(f"P{i+1}： {row['Price']:.1f} 元 ➜ :red[(+{row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
+                                st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**觸發歷史(新→舊)：**\n`{row['All_Dates']}`")
+                    
+                    st.error("🔴 【下跌支撐區】")
+                    if not s.empty:
+                        for i, (_, row) in enumerate(s.iterrows()):
+                            with st.expander(f"S{i+1}： {row['Price']:.1f} 元 ➜ :green[({row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
+                                st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**觸發歷史(新→舊)：**\n`{row['All_Dates']}`")
 
         except Exception as e:
             st.error(f"分析錯誤: {e}")
