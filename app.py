@@ -230,7 +230,7 @@ def main():
        
         /* 3. 針對 Expander (P1, S1...)，使用負邊距讓它們貼在一起 */
         [data-testid="stExpander"] {
-            margin-bottom: -11px !important;
+            margin-bottom: -10px !important;
         }
 
         </style>
