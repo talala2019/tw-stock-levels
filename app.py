@@ -214,6 +214,19 @@ def main():
     # 使用這段更精確的 CSS
     st.markdown("""
         <style>
+        /* 1. 關鍵：縮減頁面最上方的空白 (Streamlit 預設 padding 很大) */
+        .block-container {
+            padding-top: 5rem !important;
+            padding-bottom: 0rem !important;
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+        }
+        
+        /* 2. 隱藏最上方的裝飾橫條與 Header (可選，能空出更多空間) */
+        header {
+            visibility: hidden;
+            height: 0px;
+        }
        
         /* 3. 針對 Expander (P1, S1...)，使用負邊距讓它們貼在一起 */
         [data-testid="stExpander"] {
