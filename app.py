@@ -54,13 +54,22 @@ def filter_smart_levels(df_levels, cur_price, is_support=True, dynamic_threshold
         
         unique_types = list(dict.fromkeys(c['types']))
                 
+        # --- 核心修改：將日期與訊號綁定配對，並依日期降序排序 ---
+        # 1. 把日期和訊號兩兩打包 (zip)，並利用 dict.fromkeys 去除完全相同的重複組合
+        paired = list(dict.fromkeys(zip(c['dates'], c['types'])))
+        
+        # 2. 依照日期進行降序排序 (新 -> 舊)
+        paired_sorted = sorted(paired, key=lambda x: pd.to_datetime(x[0]), reverse=True)
+        
+        # 3. 組合出有條理的 Markdown 項目符號清單
+        detail_list = [f"- `{pd.to_datetime(d).strftime('%Y-%m-%d')}` : {t}" for d, t in paired_sorted]
+                
         selected.append({
             'Price': round(mean_p, 2),
             'Pct': round(pct, 1),
             'Distance': dist,
-            'All_Dates': " | ".join(unique_dates_str), # 這是給 UI 用的新欄位
             'Signal_Count': len(c['prices']),
-            'Types_Merged': "、".join(unique_types)
+            'Details_Merged': "\n".join(detail_list) # 取代原本分開的 All_Dates 和 Types_Merged
         })
         
     res_df = pd.DataFrame(selected)
@@ -373,13 +382,13 @@ def main():
                     if not r.empty:
                         for i, (_, row) in enumerate(r.iterrows()):
                             with st.expander(f"P{i+1}： {row['Price']:.1f} 元 ➜ :red[(+{row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
-                                st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**觸發歷史(新→舊)：**\n`{row['All_Dates']}`")
+                                st.markdown(f"**訊號觸發明細 (新→舊)：**\n{row['Details_Merged']}")
                     
                     st.error("🔴 【下跌支撐區】")
                     if not s.empty:
                         for i, (_, row) in enumerate(s.iterrows()):
                             with st.expander(f"S{i+1}： {row['Price']:.1f} 元 ➜ :green[({row['Pct']}%)] | 🔥融合 {row['Signal_Count']} 個訊號"): 
-                                st.markdown(f"**訊號來源：** `{row['Types_Merged']}`\n\n**觸發歷史(新→舊)：**\n`{row['All_Dates']}`")
+                                st.markdown(f"**訊號觸發明細 (新→舊)：**\n{row['Details_Merged']}")
 
         except Exception as e:
             st.error(f"分析錯誤: {e}")
